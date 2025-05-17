@@ -1,81 +1,98 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, addIcon } from 'obsidian';
+import { Groq } from 'groq-sdk';
+import { PROMPT, TITLE_PROMPT } from './prompt';
+import { ID8_SVG } from 'id8_svg';
 
-// Remember to rename these classes and interfaces!
-
-interface MyPluginSettings {
-	mySetting: string;
+interface Id8PluginSettings {
+	groqApiKey: string;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+const DEFAULT_SETTINGS: Id8PluginSettings = {
+	groqApiKey: ''
 }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class Id8Plugin extends Plugin {
+	settings: Id8PluginSettings;
+
+	private async transcribeAudio() {
+		try {
+			const file = this.app.workspace.getActiveFile();
+			if (!file) {
+				new Notice('No active file.');
+				return;
+			}
+
+			if (file.extension !== 'm4a') {
+				new Notice('File is not an audio file.');
+				return;
+			}
+
+			new Notice('Transcribing audio...');
+			const audioContent = await this.app.vault.readBinary(file);
+			const groq = new Groq({
+				apiKey: this.settings.groqApiKey,
+				dangerouslyAllowBrowser: true,
+			});
+
+			const transcription = await groq.audio.transcriptions.create({
+				model: 'whisper-large-v3',
+				file: new File([audioContent], file.name, { type: 'audio/m4a' }),
+				language: 'en',
+				response_format: 'text',
+			});
+
+			const summarized = await groq.chat.completions.create({
+				model: 'meta-llama/llama-4-maverick-17b-128e-instruct',
+				messages: [
+					{
+						role: 'user',
+						content: PROMPT.replace('{{transcription}}', transcription as any as string),
+					},
+				],
+			})
+			const title_res = await groq.chat.completions.create({
+				model: 'llama-3.1-8b-instant',
+				messages: [
+					{
+						role: 'user',
+						content: TITLE_PROMPT.replace('{{notes}}', summarized.choices[0].message.content || ''),
+					},
+				],
+			})
+			const today = new Date();
+			const dateAndTime = `${today.toLocaleDateString()} ${today.toLocaleTimeString()}`;
+			const title = title_res.choices[0].message.content?.replace(/[^a-zA-Z0-9\s]/g, '') ?? `Untitled`;
+
+			const noteContents = `Date: ${dateAndTime}
+
+${summarized.choices[0].message.content}`
+
+			const newFile = await this.app.vault.create(file.path.replace(file.name, `${title}.md`), noteContents);
+			await this.app.workspace.getLeaf(true).openFile(newFile);
+			new Notice('Done! Created note: ' + newFile.name);
+		} catch (e) {
+			new Notice('Error transcribing audio: ' + e);
+		}
+	}
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+		addIcon('id8', ID8_SVG);
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
-
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
+		this.addRibbonIcon('id8', 'Transcribe with id8', () => {
+			this.transcribeAudio();
 		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
+		this.addCommand({
+			id: 'id8-transcribe-audio',
+			name: 'Transcribe audio',
+			callback: async () => {
+				this.transcribeAudio();
 			}
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
 		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
 	}
 
 	onunload() {
@@ -91,44 +108,30 @@ export default class MyPlugin extends Plugin {
 	}
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
 class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+	plugin: Id8Plugin;
 
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: Id8Plugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
 
 	display(): void {
-		const {containerEl} = this;
+		const { containerEl } = this;
 
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
+			.setName('Groq API Key')
+			.setDesc('Get your API key from: https://console.groq.com/keys')
+			.addText((text) => {
+				text.inputEl.type = 'password';
+				return text.setPlaceholder('gsk_XXXXX')
+					.setValue(this.plugin.settings.groqApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.groqApiKey = value;
+						await this.plugin.saveSettings();
+					})
+			});
 	}
 }

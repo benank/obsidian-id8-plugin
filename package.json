@@ -1,24 +1,28 @@
 {
-	"name": "obsidian-sample-plugin",
+	"name": "obsidian-id8-plugin",
 	"version": "1.0.0",
-	"description": "This is a sample plugin for Obsidian (https://obsidian.md)",
-	"main": "main.js",
+	"description": "This is the id8 plugin for Obsidian (https://obsidian.md)",
+	"main": "main.ts",
 	"scripts": {
-		"dev": "node esbuild.config.mjs",
-		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"version": "node version-bump.mjs && git add manifest.json versions.json"
+		"dev": "vite-node esbuild.config.ts",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.ts production",
+		"version": "vite-node version-bump.ts && git add manifest.json versions.json"
 	},
 	"keywords": [],
-	"author": "",
+	"author": "benank",
 	"license": "MIT",
 	"devDependencies": {
-		"@types/node": "^16.11.6",
-		"@typescript-eslint/eslint-plugin": "5.29.0",
-		"@typescript-eslint/parser": "5.29.0",
-		"builtin-modules": "3.3.0",
-		"esbuild": "0.17.3",
+		"@types/node": "^22.15.18",
+		"@typescript-eslint/eslint-plugin": "8.32.1",
+		"@typescript-eslint/parser": "8.32.1",
+		"builtin-modules": "5.0.0",
+		"esbuild": "0.25.4",
 		"obsidian": "latest",
-		"tslib": "2.4.0",
-		"typescript": "4.7.4"
+		"tslib": "2.8.1",
+		"typescript": "5.8.3",
+		"vite-node": "3.1.3"
+	},
+	"dependencies": {
+		"groq-sdk": "^0.22.0"
 	}
 }
