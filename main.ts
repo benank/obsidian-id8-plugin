@@ -58,10 +58,11 @@ export default class Id8Plugin extends Plugin {
 						content: TITLE_PROMPT.replace('{{notes}}', summarized.choices[0].message.content || ''),
 					},
 				],
+				response_format: { type: 'json_object' },
 			})
 			const today = new Date();
 			const dateAndTime = `${today.toLocaleDateString()} ${today.toLocaleTimeString()}`;
-			const title = title_res.choices[0].message.content?.replace(/[^a-zA-Z0-9\s]/g, '') ?? `Untitled`;
+			const title = JSON.parse(title_res.choices[0].message.content || '{}').title?.replace(/[^a-zA-Z0-9\s]/g, '') ?? `Untitled`;
 
 			const noteContents = `Date: ${dateAndTime}
 

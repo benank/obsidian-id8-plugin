@@ -41,5 +41,10 @@ For example:
 
 If the notes are empty or unclear, return "Untitled Note".
 
+You must output only JSON with the following format:
+{
+  "title": "<generated title>"
+}
+
 The following are the notes to title:
 {{notes}}`
