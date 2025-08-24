@@ -1,18 +1,22 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, addIcon } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, addIcon, Editor, MarkdownView } from 'obsidian';
 import { Groq } from 'groq-sdk';
 import { PROMPT, TITLE_PROMPT } from './prompt';
 import { ID8_SVG } from 'id8_svg';
+import { InlineMenuManager } from './inline-menu';
 
 interface Id8PluginSettings {
 	groqApiKey: string;
+	selectedModel: string;
 }
 
 const DEFAULT_SETTINGS: Id8PluginSettings = {
-	groqApiKey: ''
+	groqApiKey: '',
+	selectedModel: 'llama-3.1-8b-instant'
 }
 
 export default class Id8Plugin extends Plugin {
 	settings: Id8PluginSettings;
+	private inlineMenuManager: InlineMenuManager;
 
 	private async transcribeAudio() {
 		try {
@@ -81,6 +85,13 @@ ${summarized.choices[0].message.content}`
 
 		addIcon('id8', ID8_SVG);
 
+		// Initialize the inline menu manager
+		this.inlineMenuManager = new InlineMenuManager(this.app, {
+			groqApiKey: this.settings.groqApiKey,
+			selectedModel: this.settings.selectedModel
+		});
+		this.addChild(this.inlineMenuManager);
+
 		this.addRibbonIcon('id8', 'Transcribe with id8', () => {
 			this.transcribeAudio();
 		});
@@ -90,6 +101,16 @@ ${summarized.choices[0].message.content}`
 			name: 'Transcribe audio',
 			callback: async () => {
 				this.transcribeAudio();
+			}
+		});
+
+		// Add command for inline AI menu with Cmd+K hotkey override
+		this.addCommand({
+			id: 'id8-inline-menu',
+			name: 'Open inline AI menu',
+			hotkeys: [{ modifiers: ['Mod'], key: 'k' }],
+			editorCallback: (editor: Editor, view: MarkdownView) => {
+				this.inlineMenuManager.handleInlineMenuCommand(editor, view);
 			}
 		});
 
@@ -106,6 +127,14 @@ ${summarized.choices[0].message.content}`
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+		
+		// Update the inline menu manager with new settings
+		if (this.inlineMenuManager) {
+			this.inlineMenuManager.updateSettings({
+				groqApiKey: this.settings.groqApiKey,
+				selectedModel: this.settings.selectedModel
+			});
+		}
 	}
 }
 
@@ -133,6 +162,30 @@ class SampleSettingTab extends PluginSettingTab {
 						this.plugin.settings.groqApiKey = value;
 						await this.plugin.saveSettings();
 					})
+			});
+
+		new Setting(containerEl)
+			.setName('Default Model')
+			.setDesc('Select the default AI model to use for text operations')
+			.addDropdown((dropdown) => {
+				const models = [
+					'llama-3.1-8b-instant',
+					'llama-3.3-70b-versatile',
+					'openai/gpt-oss-20b',
+					'openai/gpt-oss-120b',
+					'moonshotai/kimi-k2-instruct'
+				];
+
+				models.forEach(model => {
+					dropdown.addOption(model, model);
+				});
+
+				return dropdown
+					.setValue(this.plugin.settings.selectedModel)
+					.onChange(async (value) => {
+						this.plugin.settings.selectedModel = value;
+						await this.plugin.saveSettings();
+					});
 			});
 	}
 }
