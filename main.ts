@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, addIcon, Editor, MarkdownView } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, addIcon, Editor, MarkdownView, TFile } from 'obsidian';
 import { Groq } from 'groq-sdk';
 import { PROMPT, TITLE_PROMPT } from './prompt';
 import { ID8_SVG } from 'id8_svg';
@@ -7,16 +7,25 @@ import { InlineMenuManager } from './inline-menu';
 interface Id8PluginSettings {
 	groqApiKey: string;
 	selectedModel: string;
+	dailyWordCount: number;
+	lastResetDate: string;
+	baselineWordCount: number; // Word count at the start of the day
 }
 
 const DEFAULT_SETTINGS: Id8PluginSettings = {
 	groqApiKey: '',
-	selectedModel: 'llama-3.1-8b-instant'
+	selectedModel: 'llama-3.1-8b-instant',
+	dailyWordCount: 0,
+	lastResetDate: new Date().toDateString(),
+	baselineWordCount: 0
 }
 
 export default class Id8Plugin extends Plugin {
 	settings: Id8PluginSettings;
 	private inlineMenuManager: InlineMenuManager;
+	private statusBarItem: HTMLElement;
+	private dailyGoal: number = 1000;
+	private static STORIES_FOLDER = 'Stories/';
 
 	private async transcribeAudio() {
 		try {
@@ -92,6 +101,11 @@ ${summarized.choices[0].message.content}`
 		});
 		this.addChild(this.inlineMenuManager);
 
+		// Initialize daily word count
+		this.checkAndResetDailyCount();
+		this.setupStatusBar();
+		this.setupWordCountTracking();
+
 		this.addRibbonIcon('id8', 'Transcribe with id8', () => {
 			this.transcribeAudio();
 		});
@@ -119,6 +133,193 @@ ${summarized.choices[0].message.content}`
 
 	onunload() {
 
+	}
+
+	/**
+	 * Check if it's a new day and reset the word count at 2 AM
+	 */
+	private async checkAndResetDailyCount() {
+		const now = new Date();
+		const lastReset = new Date(this.settings.lastResetDate);
+		
+		// Check if it's past 2 AM today and we haven't reset yet today
+		const resetHour = 2;
+		const todayAt2AM = new Date(now);
+		todayAt2AM.setHours(resetHour, 0, 0, 0);
+		
+		// If it's past 2 AM today and our last reset was before today's 2 AM
+		if (now >= todayAt2AM && lastReset < todayAt2AM) {
+			// Reset daily count and set new baseline
+			await this.resetDailyCount();
+		}
+		
+		// Schedule next check at 2 AM tomorrow
+		this.scheduleNextReset();
+	}
+
+	/**
+	 * Reset the daily word count and set new baseline
+	 */
+	private async resetDailyCount() {
+		const currentTotal = await this.getTotalStoriesWordCount();
+		this.settings.dailyWordCount = 0;
+		this.settings.baselineWordCount = currentTotal;
+		this.settings.lastResetDate = new Date().toDateString();
+		await this.saveSettings();
+		this.updateStatusBar();
+	}
+
+	/**
+	 * Schedule the next daily reset
+	 */
+	private scheduleNextReset() {
+		const now = new Date();
+		const tomorrow2AM = new Date(now);
+		tomorrow2AM.setDate(now.getDate() + 1);
+		tomorrow2AM.setHours(2, 0, 0, 0);
+		
+		const timeUntilReset = tomorrow2AM.getTime() - now.getTime();
+		
+		setTimeout(() => {
+			this.checkAndResetDailyCount();
+		}, timeUntilReset);
+	}
+
+	/**
+	 * Set up the status bar item to display daily word count progress
+	 */
+	private setupStatusBar() {
+		this.statusBarItem = this.addStatusBarItem();
+		this.updateStatusBar();
+	}
+
+	/**
+	 * Update the status bar with current progress
+	 */
+	private updateStatusBar() {
+		const actualPercentage = Math.round((this.settings.dailyWordCount / this.dailyGoal) * 100);
+		const circlePercentage = Math.min(100, actualPercentage); // Cap circle progress at 100%
+		
+		// Create a circular progress indicator (capped at 100%)
+		const svg = `<svg width="16" height="16" viewBox="0 0 16 16" style="margin-right: 4px; vertical-align: middle;">
+			<circle cx="8" cy="8" r="6" fill="none" stroke="var(--text-muted)" stroke-width="2"/>
+			<circle cx="8" cy="8" r="6" fill="none" stroke="var(--text-accent)" stroke-width="2"
+				stroke-dasharray="${2 * Math.PI * 6}" 
+				stroke-dashoffset="${2 * Math.PI * 6 * (1 - circlePercentage / 100)}"
+				transform="rotate(-90 8 8)" style="transition: stroke-dashoffset 0.3s ease;"/>
+		</svg>`;
+		
+		// Show actual percentage (can exceed 100%)
+		this.statusBarItem.innerHTML = `${svg}${actualPercentage}%`;
+		this.statusBarItem.title = `Daily writing progress: ${this.settings.dailyWordCount}/${this.dailyGoal} words (${actualPercentage}%)`;
+	}
+
+	/**
+	 * Set up word count tracking for files in the Stories folder
+	 */
+	private setupWordCountTracking() {
+		// Track when files are modified
+		this.registerEvent(
+			this.app.vault.on('modify', (file) => {
+				if (file instanceof TFile && file.path.includes(Id8Plugin.STORIES_FOLDER) && file.extension === 'md') {
+					this.updateWordCountForFile(file);
+				}
+			})
+		);
+
+		// Track when files are created
+		this.registerEvent(
+			this.app.vault.on('create', (file) => {
+				if (file instanceof TFile && file.path.includes(Id8Plugin.STORIES_FOLDER) && file.extension === 'md') {
+					this.updateWordCountForFile(file);
+				}
+			})
+		);
+
+		// Calculate initial word count for all Stories files
+		this.calculateInitialWordCount();
+	}
+
+	/**
+	 * Calculate the initial word count for all files in Stories folder
+	 */
+	private async calculateInitialWordCount() {
+		const currentTotal = await this.getTotalStoriesWordCount();
+		
+		// If this is the first time or we don't have a baseline, set it
+		if (this.settings.baselineWordCount === 0) {
+			this.settings.baselineWordCount = currentTotal;
+			await this.saveSettings();
+		}
+		
+		// Calculate daily progress as difference from baseline
+		this.settings.dailyWordCount = Math.max(0, currentTotal - this.settings.baselineWordCount);
+		await this.saveSettings();
+		this.updateStatusBar();
+	}
+
+	/**
+	 * Get total word count for all Stories files
+	 */
+	private async getTotalStoriesWordCount(): Promise<number> {
+		const files = this.app.vault.getMarkdownFiles();
+		let totalWords = 0;
+
+		for (const file of files) {
+			if (file.path.includes(Id8Plugin.STORIES_FOLDER)) {
+				try {
+					const content = await this.app.vault.read(file);
+					totalWords += this.countWords(content);
+				} catch (error) {
+					// File might be deleted, skip
+					continue;
+				}
+			}
+		}
+
+		return totalWords;
+	}
+
+	/**
+	 * Update word count when a file is modified
+	 */
+	private async updateWordCountForFile(file: TFile) {
+		if (!file.path.includes(Id8Plugin.STORIES_FOLDER) || file.extension !== 'md') return;
+		
+		// Debounce to avoid too frequent updates
+		setTimeout(async () => {
+			await this.recalculateTotalWordCount();
+		}, 1000);
+	}
+
+	/**
+	 * Recalculate daily word count based on current total vs baseline
+	 */
+	private async recalculateTotalWordCount() {
+		const currentTotal = await this.getTotalStoriesWordCount();
+		
+		// Calculate daily progress as difference from baseline
+		this.settings.dailyWordCount = Math.max(0, currentTotal - this.settings.baselineWordCount);
+		await this.saveSettings();
+		this.updateStatusBar();
+	}
+
+	/**
+	 * Count words in a text content
+	 */
+	private countWords(content: string): number {
+		// Remove markdown syntax and count words
+		const text = content
+			.replace(/```[\s\S]*?```/g, '') // Remove code blocks
+			.replace(/`[^`]*`/g, '') // Remove inline code
+			.replace(/!\[.*?\]\(.*?\)/g, '') // Remove images
+			.replace(/\[.*?\]\(.*?\)/g, '') // Remove links
+			.replace(/[#*_~\[\]()]/g, ' ') // Remove markdown characters
+			.replace(/\s+/g, ' ') // Normalize whitespace
+			.trim();
+		
+		if (!text) return 0;
+		return text.split(/\s+/).length;
 	}
 
 	async loadSettings() {
