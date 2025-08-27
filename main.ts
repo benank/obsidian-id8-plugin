@@ -8,15 +8,13 @@ interface Id8PluginSettings {
 	groqApiKey: string;
 	selectedModel: string;
 	dailyWordCount: number;
-	lastResetDate: string;
-	baselineWordCount: number; // Word count at the start of the day
+	baselineWordCount: number; // Word count at the start of tracking
 }
 
 const DEFAULT_SETTINGS: Id8PluginSettings = {
 	groqApiKey: '',
 	selectedModel: 'llama-3.1-8b-instant',
 	dailyWordCount: 0,
-	lastResetDate: new Date().toDateString(),
 	baselineWordCount: 0
 }
 
@@ -101,10 +99,10 @@ ${summarized.choices[0].message.content}`
 		});
 		this.addChild(this.inlineMenuManager);
 
-		// Initialize daily word count
-		this.checkAndResetDailyCount();
+		// Initialize word count tracking
 		this.setupStatusBar();
 		this.setupWordCountTracking();
+		this.calculateInitialWordCount();
 
 		this.addRibbonIcon('id8', 'Transcribe with id8', () => {
 			this.transcribeAudio();
@@ -136,60 +134,30 @@ ${summarized.choices[0].message.content}`
 	}
 
 	/**
-	 * Check if it's a new day and reset the word count at 2 AM
+	 * Reset the word count when user clicks the status bar
 	 */
-	private async checkAndResetDailyCount() {
-		const now = new Date();
-		const lastReset = new Date(this.settings.lastResetDate);
-		
-		// Check if it's past 2 AM today and we haven't reset yet today
-		const resetHour = 2;
-		const todayAt2AM = new Date(now);
-		todayAt2AM.setHours(resetHour, 0, 0, 0);
-		
-		// If it's past 2 AM today and our last reset was before today's 2 AM
-		if (now >= todayAt2AM && lastReset < todayAt2AM) {
-			// Reset daily count and set new baseline
-			await this.resetDailyCount();
-		}
-		
-		// Schedule next check at 2 AM tomorrow
-		this.scheduleNextReset();
-	}
-
-	/**
-	 * Reset the daily word count and set new baseline
-	 */
-	private async resetDailyCount() {
+	private async resetWordCount() {
 		const currentTotal = await this.getTotalStoriesWordCount();
 		this.settings.dailyWordCount = 0;
 		this.settings.baselineWordCount = currentTotal;
-		this.settings.lastResetDate = new Date().toDateString();
 		await this.saveSettings();
 		this.updateStatusBar();
+		new Notice('Word count reset!');
 	}
 
-	/**
-	 * Schedule the next daily reset
-	 */
-	private scheduleNextReset() {
-		const now = new Date();
-		const tomorrow2AM = new Date(now);
-		tomorrow2AM.setDate(now.getDate() + 1);
-		tomorrow2AM.setHours(2, 0, 0, 0);
-		
-		const timeUntilReset = tomorrow2AM.getTime() - now.getTime();
-		
-		setTimeout(() => {
-			this.checkAndResetDailyCount();
-		}, timeUntilReset);
-	}
+
+
+
 
 	/**
-	 * Set up the status bar item to display daily word count progress
+	 * Set up the status bar item to display word count progress with click to reset
 	 */
 	private setupStatusBar() {
 		this.statusBarItem = this.addStatusBarItem();
+		this.statusBarItem.style.cursor = 'pointer';
+		this.statusBarItem.addEventListener('click', () => {
+			this.resetWordCount();
+		});
 		this.updateStatusBar();
 	}
 
@@ -211,7 +179,7 @@ ${summarized.choices[0].message.content}`
 		
 		// Show actual percentage (can exceed 100%)
 		this.statusBarItem.innerHTML = `${svg}${actualPercentage}%`;
-		this.statusBarItem.title = `Daily writing progress: ${this.settings.dailyWordCount}/${this.dailyGoal} words (${actualPercentage}%)`;
+		this.statusBarItem.title = `Writing progress: ${this.settings.dailyWordCount}/${this.dailyGoal} words (${actualPercentage}%)\nClick to reset count`;
 	}
 
 	/**
@@ -236,8 +204,7 @@ ${summarized.choices[0].message.content}`
 			})
 		);
 
-		// Calculate initial word count for all Stories files
-		this.calculateInitialWordCount();
+
 	}
 
 	/**
